@@ -28,12 +28,12 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
             '/redfish/v1/Systems/%s/VirtualMedia' % self.uuid)
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('Virtual Media Services', response.json['Name'])
-        self.assertEqual(2, response.json['Members@odata.count'])
+        self.assertEqual('Virtual Media Services', response.json()['Name'])
+        self.assertEqual(2, response.json()['Members@odata.count'])
         self.assertEqual(
             ['/redfish/v1/Systems/%s/VirtualMedia/CD' % self.uuid,
              '/redfish/v1/Systems/%s/VirtualMedia/Floppy' % self.uuid],
-            [m['@odata.id'] for m in response.json['Members']])
+            [m['@odata.id'] for m in response.json()['Members']])
 
     def test_virtual_media_collection_empty(self, systems_mock, vmedia_mock):
         vmedia_mock.return_value.get_devices.return_value = []
@@ -42,9 +42,9 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
             'redfish/v1/Systems/' + self.uuid + '/VirtualMedia')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('Virtual Media Services', response.json['Name'])
-        self.assertEqual(0, response.json['Members@odata.count'])
-        self.assertEqual([], response.json['Members'])
+        self.assertEqual('Virtual Media Services', response.json()['Name'])
+        self.assertEqual(0, response.json()['Members@odata.count'])
+        self.assertEqual([], response.json()['Members'])
 
     def test_virtual_media(self, systems_mock, vmedia_mock):
         vmedia_mock = vmedia_mock.return_value
@@ -57,19 +57,19 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
         response = self.app.get(
             '/redfish/v1/Systems/%s/VirtualMedia/CD' % self.uuid)
 
-        self.assertEqual(200, response.status_code, response.json)
-        self.assertEqual('CD', response.json['Id'])
-        self.assertEqual(['CD', 'DVD'], response.json['MediaTypes'])
-        self.assertEqual('fishy.iso', response.json['Image'])
-        self.assertEqual('image-of-a-fish', response.json['ImageName'])
-        self.assertTrue(response.json['Inserted'])
-        self.assertTrue(response.json['WriteProtected'])
-        self.assertEqual('', response.json['UserName'])
-        self.assertEqual('', response.json['Password'])
-        self.assertFalse(response.json['VerifyCertificate'])
+        self.assertEqual(200, response.status_code, response.json())
+        self.assertEqual('CD', response.json()['Id'])
+        self.assertEqual(['CD', 'DVD'], response.json()['MediaTypes'])
+        self.assertEqual('fishy.iso', response.json()['Image'])
+        self.assertEqual('image-of-a-fish', response.json()['ImageName'])
+        self.assertTrue(response.json()['Inserted'])
+        self.assertTrue(response.json()['WriteProtected'])
+        self.assertEqual('', response.json()['UserName'])
+        self.assertEqual('', response.json()['Password'])
+        self.assertFalse(response.json()['VerifyCertificate'])
         self.assertEqual(
             '/redfish/v1/Systems/%s/VirtualMedia/CD/Certificates' % self.uuid,
-            response.json['Certificates']['@odata.id'])
+            response.json()['Certificates']['@odata.id'])
 
     def test_virtual_media_with_auth(self, systems_mock, vmedia_mock):
         vmedia_mock = vmedia_mock.return_value
@@ -83,16 +83,16 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
         response = self.app.get(
             '/redfish/v1/Systems/%s/VirtualMedia/CD' % self.uuid)
 
-        self.assertEqual(200, response.status_code, response.json)
-        self.assertEqual('CD', response.json['Id'])
-        self.assertEqual(['CD', 'DVD'], response.json['MediaTypes'])
-        self.assertEqual('fishy.iso', response.json['Image'])
-        self.assertEqual('image-of-a-fish', response.json['ImageName'])
-        self.assertTrue(response.json['Inserted'])
-        self.assertTrue(response.json['WriteProtected'])
-        self.assertEqual('Admin', response.json['UserName'])
-        self.assertEqual('******', response.json['Password'])
-        self.assertFalse(response.json['VerifyCertificate'])
+        self.assertEqual(200, response.status_code, response.json())
+        self.assertEqual('CD', response.json()['Id'])
+        self.assertEqual(['CD', 'DVD'], response.json()['MediaTypes'])
+        self.assertEqual('fishy.iso', response.json()['Image'])
+        self.assertEqual('image-of-a-fish', response.json()['ImageName'])
+        self.assertTrue(response.json()['Inserted'])
+        self.assertTrue(response.json()['WriteProtected'])
+        self.assertEqual('Admin', response.json()['UserName'])
+        self.assertEqual('******', response.json()['Password'])
+        self.assertFalse(response.json()['VerifyCertificate'])
 
     def test_virtual_media_not_found(self, systems_mock, vmedia_mock):
         vmedia_mock.return_value.get_device_name.side_effect = error.NotFound
@@ -167,14 +167,14 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
         response = self.app.get(
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates')
 
-        self.assertEqual(200, response.status_code, response.json)
-        self.assertEqual(2, response.json['Members@odata.count'])
-        for index, member in enumerate(response.json['Members']):
+        self.assertEqual(200, response.status_code, response.json())
+        self.assertEqual(2, response.json()['Members@odata.count'])
+        for index, member in enumerate(response.json()['Members']):
             self.assertTrue(member['@odata.id'].endswith(
                 f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD'
                 f'/Certificates/{index + 1}'), member['@odata.id'])
         self.assertEqual(['PEM'],
-                         response.json['@Redfish.SupportedCertificates'])
+                         response.json()['@Redfish.SupportedCertificates'])
 
     def test_virtual_media_certificates_system_not_found(self, systems_mock,
                                                          vmedia_mock):
@@ -182,7 +182,7 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
         response = self.app.get(
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates')
 
-        self.assertEqual(404, response.status_code, response.json)
+        self.assertEqual(404, response.status_code, response.json())
 
     def test_virtual_media_add_certificate(self, systems_mock, vmedia_mock):
         vmedia_mock.return_value.add_certificate.return_value = \
@@ -192,7 +192,7 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates',
             json={'CertificateString': 'abcd', 'CertificateType': 'PEM'})
 
-        self.assertEqual(204, response.status_code, response.data)
+        self.assertEqual(204, response.status_code, response.content)
         self.assertIn(
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates/9',
             response.headers['Location'])
@@ -203,7 +203,7 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates',
             json={'CertificateType': 'PEM'})
 
-        self.assertEqual(400, response.status_code, response.data)
+        self.assertEqual(400, response.status_code, response.content)
 
     def test_virtual_media_add_certificate_bad_type(self, systems_mock,
                                                     vmedia_mock):
@@ -211,7 +211,7 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates',
             json={'CertificateString': 'abcd', 'CertificateType': 'non-PEM'})
 
-        self.assertEqual(400, response.status_code, response.data)
+        self.assertEqual(400, response.status_code, response.content)
 
     def test_virtual_media_get_certificate(self, systems_mock, vmedia_mock):
         vmedia_mock.return_value.list_certificates.return_value = [
@@ -221,11 +221,11 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
         response = self.app.get(
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates/2')
 
-        self.assertEqual(200, response.status_code, response.json)
-        self.assertIn('Id', response.json)
-        self.assertEqual('2', response.json['Id'])
-        self.assertEqual('dcba', response.json['CertificateString'])
-        self.assertEqual('PEM', response.json['CertificateType'])
+        self.assertEqual(200, response.status_code, response.json())
+        self.assertIn('Id', response.json())
+        self.assertEqual('2', response.json()['Id'])
+        self.assertEqual('dcba', response.json()['CertificateString'])
+        self.assertEqual('PEM', response.json()['CertificateType'])
 
     def test_virtual_media_get_certificate_system_not_found(self,
                                                             systems_mock,
@@ -234,14 +234,14 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
         response = self.app.get(
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates/2')
 
-        self.assertEqual(404, response.status_code, response.json)
+        self.assertEqual(404, response.status_code, response.json())
 
     def test_virtual_media_delete_certificate(self, systems_mock,
                                               vmedia_mock):
         response = self.app.delete(
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates/2')
 
-        self.assertEqual(204, response.status_code, response.data)
+        self.assertEqual(204, response.status_code, response.content)
         vmedia_mock.return_value.delete_certificate.assert_called_once_with(
             self.uuid, 'CD', '2')
 
@@ -252,5 +252,5 @@ class VirtualMediaTestCase(test_main.EmulatorTestCase):
         response = self.app.delete(
             f'/redfish/v1/Systems/{self.uuid}/VirtualMedia/CD/Certificates/2')
 
-        self.assertEqual(404, response.status_code, response.json)
+        self.assertEqual(404, response.status_code, response.json())
         vmedia_mock.return_value.delete_certificate.assert_not_called()

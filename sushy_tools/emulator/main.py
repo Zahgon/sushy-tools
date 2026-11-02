@@ -16,13 +16,19 @@
 import argparse
 from datetime import datetime
 import json
+import logging
 import os
 import signal
 import ssl
 import sys
 
-import flask
-from werkzeug import exceptions as wz_exc
+import fastapi
+from fastapi import exceptions as fastapi_exc
+from fastapi import responses
+import jinja2
+from starlette import exceptions as starlette_exc
+from starlette import routing as starlette_routing
+import uvicorn
 
 from sushy_tools.emulator import api_utils
 from sushy_tools.emulator import auth_basic
@@ -94,41 +100,98 @@ def _render_error(message):
     }
 
 
+def all_exception_handler(request, message):
+    """Render a failure as the Flask error handler did
+
+    An alias redirects with 307 to the same route of the resolved identity.
+    Anything else is error.json under its own code, or 500 when it has none.
+    Router 404 and 405 errors keep the wording of the Flask release.
+    """
+    if isinstance(message, error.AliasAccessError):
+        route = request.scope['route']
+        try:
+            url = request.app.url_path_for(route.name,
+                                           identity=message.args[0])
+        except starlette_routing.NoMatchFound:
+            message = error.HTTPError(500)
+        else:
+            return api_utils.redirect(url, 307)
+
+    if isinstance(message, starlette_exc.HTTPException):
+        # The Flask handler also answered Werkzeug's exceptions with a new
+        # response, so their headers never reached the client: a 405 from the
+        # Flask release has no Allow header, and neither does this one.
+        message = error.HTTPError(message.status_code)
+
+    code = getattr(message, 'code', 500)
+    if isinstance(message, error.FishyError):
+        request.app.logger.debug(
+            'Request failed with %s: %s', message.__class__.__name__, message)
+    else:
+        request.app.logger.exception(
+            'Unexpected %s: %s', message.__class__.__name__, message)
+
+    return responses.Response(
+        request.app.render_template('error.json', message=message),
+        status_code=code, media_type='application/json')
+
+
 class RedfishAuthMiddleware(auth_basic.BasicAuthMiddleware):
 
     _EXCLUDE_PATHS = frozenset(['', 'redfish', 'redfish/v1'])
 
-    def __call__(self, env, start_response):
-        path = env.get('PATH_INFO', '')
+    async def __call__(self, scope, receive, send):
+        path = scope.get('path', '')
         if path.strip('/') in self._EXCLUDE_PATHS:
-            return self.app(env, start_response)
+            await self.app(scope, receive, send)
         else:
-            return super().__call__(env, start_response)
+            await super().__call__(scope, receive, send)
 
-    def format_exception(self, e):
-        response = super().format_exception(e)
-        response.json_body = _render_error(str(e))
-        return response
+    def error_body(self, e):
+        return _render_error(str(e))
 
 
-class Application(flask.Flask):
+def _load_config_file(filename):
+    namespace = {'__file__': filename}
+    with open(filename, mode='rb') as config_file:
+        exec(compile(config_file.read(), filename, 'exec'), namespace)
+    return {key: value for key, value in namespace.items() if key.isupper()}
+
+
+class Application(fastapi.FastAPI):
 
     def __init__(self):
-        super().__init__(__name__)
-        # Turn off strict_slashes on all routes
-        self.url_map.strict_slashes = False
-        # This is needed for WSGI since it cannot process argv
+        # Flask generated no documentation routes and, with strict_slashes
+        # turned off, never redirected between trailing slash forms.
+        super().__init__(openapi_url=None, docs_url=None, redoc_url=None,
+                         redirect_slashes=False)
+        self.router.route_class = api_utils.RedfishRoute
+        self.config = {}
+        self.logger = logging.getLogger(__name__)
+        self.templates = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(
+                os.path.join(os.path.dirname(__file__), 'templates')))
+        # Every failure renders error.json. Replacing these defaults keeps
+        # FastAPI's {"detail": ...} and 422 documents off the wire. No route
+        # declares anything FastAPI would validate, so RequestValidationError
+        # is only a safeguard: bad bodies get their 400 and 415 from JsonBody.
+        for exc_class in (starlette_exc.HTTPException,
+                          fastapi_exc.RequestValidationError, Exception):
+            self.add_exception_handler(exc_class, all_exception_handler)
+        # This is needed for ASGI servers since they cannot process argv
         self.configure(config_file=os.environ.get('SUSHY_EMULATOR_CONFIG'))
 
     def configure(self, config_file=None, extra_config=None):
         if config_file:
-            self.config.from_pyfile(os.path.abspath(config_file))
+            self.config.update(
+                _load_config_file(os.path.abspath(config_file)))
         if extra_config:
             self.config.update(extra_config)
 
         auth_file = self.config.get("SUSHY_EMULATOR_AUTH_FILE")
-        if auth_file and not isinstance(self.wsgi_app, RedfishAuthMiddleware):
-            self.wsgi_app = RedfishAuthMiddleware(self.wsgi_app, auth_file)
+        if auth_file and not any(middleware.cls is RedfishAuthMiddleware
+                                 for middleware in self.user_middleware):
+            self.add_middleware(RedfishAuthMiddleware, auth_file=auth_file)
 
         feature_set = self.config.get('SUSHY_EMULATOR_FEATURE_SET', 'full')
         if feature_set not in ('full', 'vmedia', 'minimum'):
@@ -140,7 +203,7 @@ class Application(flask.Flask):
 
     def render_template(self, template_name, /, **params):
         params.setdefault('feature_set', self.feature_set)
-        return flask.render_template(template_name, **params)
+        return self.templates.get_template(template_name).render(**params)
 
     @property
     @memoize.memoize()
@@ -225,37 +288,18 @@ class Application(flask.Flask):
 
 
 app = Application()
-app.register_blueprint(certctl.certificate_service)
-app.register_blueprint(vmctl.virtual_media)
-app.register_blueprint(usctl.update_service)
+app.include_router(certctl.certificate_service)
+app.include_router(vmctl.virtual_media)
+app.include_router(usctl.update_service)
 
 
-@app.errorhandler(Exception)
-@api_utils.returns_json
-def all_exception_handler(message):
-    if isinstance(message, error.AliasAccessError):
-        url = flask.url_for(flask.request.endpoint, identity=message.args[0])
-        return flask.redirect(url, code=307, Response=flask.Response)
-
-    code = getattr(message, 'code', 500)
-    if (isinstance(message, error.FishyError)
-            or isinstance(message, wz_exc.HTTPException)):
-        app.logger.debug(
-            'Request failed with %s: %s', message.__class__.__name__, message)
-    else:
-        app.logger.exception(
-            'Unexpected %s: %s', message.__class__.__name__, message)
-
-    return flask.render_template('error.json', message=message), code
-
-
-@app.route('/redfish/v1/')
+@app.api_route('/redfish/v1/', methods=['GET'])
 @api_utils.returns_json
 def root_resource():
     return app.render_template('root.json')
 
 
-@app.route('/redfish/v1/Chassis')
+@app.api_route('/redfish/v1/Chassis', methods=['GET'])
 @api_utils.returns_json
 def chassis_collection_resource():
     if app.feature_set != "full":
@@ -269,9 +313,10 @@ def chassis_collection_resource():
         chassis=app.chassis.chassis)
 
 
-@app.route('/redfish/v1/Chassis/<identity>', methods=['GET', 'PATCH'])
+@app.api_route('/redfish/v1/Chassis/{identity}', methods=['GET', 'PATCH'])
 @api_utils.returns_json
-def chassis_resource(identity):
+def chassis_resource(request: fastapi.Request, identity,
+                     body=fastapi.Depends(api_utils.json_body)):
     if app.feature_set != "full":
         raise error.FeatureNotAvailable("Chassis")
 
@@ -279,7 +324,7 @@ def chassis_resource(identity):
 
     uuid = chassis.uuid(identity)
 
-    if flask.request.method == 'GET':
+    if request.method == 'GET':
 
         app.logger.debug('Serving resources for chassis "%s"', identity)
 
@@ -311,8 +356,8 @@ def chassis_resource(identity):
             drives=drives
         )
 
-    elif flask.request.method == 'PATCH':
-        indicator_led_state = flask.request.json.get('IndicatorLED')
+    elif request.method == 'PATCH':
+        indicator_led_state = body.json.get('IndicatorLED')
         if not indicator_led_state:
             return 'PATCH only works for IndicatorLED element', 400
 
@@ -324,7 +369,7 @@ def chassis_resource(identity):
         return '', 204
 
 
-@app.route('/redfish/v1/Chassis/<identity>/Thermal', methods=['GET'])
+@app.api_route('/redfish/v1/Chassis/{identity}/Thermal', methods=['GET'])
 @api_utils.returns_json
 def thermal_resource(identity):
     if app.feature_set != "full":
@@ -351,7 +396,7 @@ def thermal_resource(identity):
     )
 
 
-@app.route('/redfish/v1/Managers')
+@app.api_route('/redfish/v1/Managers', methods=['GET'])
 @api_utils.returns_json
 def manager_collection_resource():
     if app.feature_set == "minimum":
@@ -374,12 +419,15 @@ def jsonify(obj_type, obj_version, obj):
                                "copyright policy, see http://www.dmtf.org/"
                                "about/policies/copyright.")
     })
-    return flask.jsonify(obj)
+    return responses.Response(
+        json.dumps(obj, sort_keys=True, separators=(',', ':')) + '\n',
+        media_type='application/json')
 
 
-@app.route('/redfish/v1/Managers/<identity>', methods=['GET', 'PATCH'])
+@app.api_route('/redfish/v1/Managers/{identity}', methods=['GET', 'PATCH'])
 @api_utils.returns_json
-def manager_resource(identity):
+def manager_resource(request: fastapi.Request, identity,
+                     body=fastapi.Depends(api_utils.json_body)):
     if app.feature_set == "minimum":
         raise error.FeatureNotAvailable("Managers")
 
@@ -389,7 +437,7 @@ def manager_resource(identity):
 
     uuid = manager['UUID']
 
-    if flask.request.method == "GET":
+    if request.method == "GET":
         app.logger.debug('Serving resources for manager "%s"', identity)
 
         result = {
@@ -437,12 +485,12 @@ def manager_resource(identity):
                 })
         return jsonify('Manager', 'v1_3_1', result)
 
-    elif flask.request.method == "PATCH":
+    elif request.method == "PATCH":
         if app.feature_set != "full":
             raise error.MethodNotAllowed("PATCH not supported in minimum mode")
         try:
-            data = flask.request.get_json()
-        except wz_exc.BadRequest:
+            data = body.json
+        except error.InvalidJSONBody:
             app.logger.error(
                 "PATCH method missing in /Managers/%s due to invalid JSON",
                 identity
@@ -459,11 +507,11 @@ def manager_resource(identity):
         return '', 204
 
 
-@app.route('/redfish/v1/Systems')
+@app.api_route('/redfish/v1/Systems', methods=['GET'])
 @api_utils.returns_json
 def system_collection_resource():
     systems = [system for system in app.systems.systems
-               if not api_utils.instance_denied(identity=system)]
+               if not api_utils.instance_denied(app.config, identity=system)]
 
     app.logger.debug('Serving systems list')
 
@@ -471,10 +519,12 @@ def system_collection_resource():
         'system_collection.json', system_count=len(systems), systems=systems)
 
 
-@app.route('/redfish/v1/Systems/<identity>', methods=['GET', 'PATCH'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}', methods=['GET', 'PATCH'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
-def system_resource(identity):
+def system_resource(request: fastapi.Request, identity,
+                    body=fastapi.Depends(api_utils.json_body)):
     uuid = app.systems.uuid(identity)
     try:
         versions = app.systems.get_versions(identity)
@@ -485,7 +535,7 @@ def system_resource(identity):
 
     bios_version = versions.get('BiosVersion')
 
-    if flask.request.method == 'GET':
+    if request.method == 'GET':
 
         app.logger.debug('Serving resources for system "%s"', identity)
 
@@ -527,9 +577,9 @@ def system_resource(identity):
             http_boot_uri=try_get(app.systems.get_http_boot_uri)
         )
 
-    elif flask.request.method == 'PATCH':
-        boot = flask.request.json.get('Boot')
-        indicator_led_state = flask.request.json.get('IndicatorLED')
+    elif request.method == 'PATCH':
+        boot = body.json.get('Boot')
+        indicator_led_state = body.json.get('IndicatorLED')
         if not boot and not indicator_led_state:
             return ('PATCH only works for Boot and '
                     'IndicatorLED elements'), 400
@@ -654,9 +704,9 @@ def system_resource(identity):
         return '', 204
 
 
-@app.route('/redfish/v1/Systems/<identity>/EthernetInterfaces',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/EthernetInterfaces', methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def ethernet_interfaces_collection(identity):
     if app.feature_set == "minimum":
@@ -669,9 +719,10 @@ def ethernet_interfaces_collection(identity):
         nics=nics)
 
 
-@app.route('/redfish/v1/Systems/<identity>/EthernetInterfaces/<nic_id>',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/EthernetInterfaces/{nic_id}',
+    methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def ethernet_interface(identity, nic_id):
     if app.feature_set == "minimum":
@@ -687,9 +738,9 @@ def ethernet_interface(identity, nic_id):
     raise error.NotFound()
 
 
-@app.route('/redfish/v1/Systems/<identity>/Processors',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/Processors', methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def processors_collection(identity):
     if app.feature_set != "full":
@@ -702,9 +753,10 @@ def processors_collection(identity):
         processors=processors)
 
 
-@app.route('/redfish/v1/Systems/<identity>/Processors/<processor_id>',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/Processors/{processor_id}',
+    methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def processor(identity, processor_id):
     if app.feature_set != "full":
@@ -720,12 +772,13 @@ def processor(identity, processor_id):
     raise error.NotFound()
 
 
-@app.route('/redfish/v1/Systems/<identity>/Actions/ComputerSystem.Reset',
-           methods=['POST'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/Actions/ComputerSystem.Reset',
+    methods=['POST'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
-def system_reset_action(identity):
-    reset_type = flask.request.json.get('ResetType')
+def system_reset_action(identity, body=fastapi.Depends(api_utils.json_body)):
+    reset_type = body.json.get('ResetType')
     if app.config.get('SUSHY_EMULATOR_DISABLE_POWER_OFF') is True and \
             reset_type in ('ForceOff', 'GracefulShutdown'):
         raise error.BadRequest('Can not request power off transition. It is '
@@ -751,8 +804,9 @@ def system_reset_action(identity):
     return '', 204
 
 
-@app.route('/redfish/v1/Systems/<identity>/BIOS', methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/BIOS', methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def bios(identity):
     if app.feature_set != "full":
@@ -768,15 +822,16 @@ def bios(identity):
         bios_current_attributes=json.dumps(bios, sort_keys=True, indent=6))
 
 
-@app.route('/redfish/v1/Systems/<identity>/BIOS/Settings',
-           methods=['GET', 'PATCH'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/BIOS/Settings', methods=['GET', 'PATCH'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
-def bios_settings(identity):
+def bios_settings(request: fastapi.Request, identity,
+                  body=fastapi.Depends(api_utils.json_body)):
     if app.feature_set != "full":
         raise error.FeatureNotAvailable("BIOS")
 
-    if flask.request.method == 'GET':
+    if request.method == 'GET':
         pending_bios = _typed_bios_attributes(
             app.systems.get_pending_bios(identity))
 
@@ -788,8 +843,8 @@ def bios_settings(identity):
             bios_pending_attributes=json.dumps(
                 pending_bios, sort_keys=True, indent=6))
 
-    elif flask.request.method == 'PATCH':
-        attributes = flask.request.json.get('Attributes')
+    elif request.method == 'PATCH':
+        attributes = body.json.get('Attributes')
 
         app.systems.set_bios(identity, attributes)
 
@@ -798,9 +853,10 @@ def bios_settings(identity):
         return '', 204
 
 
-@app.route('/redfish/v1/Systems/<identity>/BIOS/Actions/Bios.ResetBios',
-           methods=['POST'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/BIOS/Actions/Bios.ResetBios',
+    methods=['POST'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def system_reset_bios(identity):
     if app.feature_set != "full":
@@ -813,15 +869,16 @@ def system_reset_bios(identity):
     return '', 204
 
 
-@app.route('/redfish/v1/Systems/<identity>/SecureBoot',
-           methods=['GET', 'PATCH'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/SecureBoot', methods=['GET', 'PATCH'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
-def secure_boot(identity):
+def secure_boot(request: fastapi.Request, identity,
+                body=fastapi.Depends(api_utils.json_body)):
     if app.feature_set != "full":
         raise error.FeatureNotAvailable("SecureBoot")
 
-    if flask.request.method == 'GET':
+    if request.method == 'GET':
         secure = app.systems.get_secure_boot(identity)
 
         app.logger.debug('Serving secure boot for system "%s"', identity)
@@ -832,8 +889,8 @@ def secure_boot(identity):
             secure_boot_enable=secure,
             secure_boot_current_boot=secure and 'Enabled' or 'Disabled')
 
-    elif flask.request.method == 'PATCH':
-        secure = flask.request.json.get('SecureBootEnable')
+    elif request.method == 'PATCH':
+        secure = body.json.get('SecureBootEnable')
 
         app.systems.set_secure_boot(identity, secure)
 
@@ -842,9 +899,9 @@ def secure_boot(identity):
         return '', 204
 
 
-@app.route('/redfish/v1/Systems/<identity>/SimpleStorage',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/SimpleStorage', methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def simple_storage_collection(identity):
     if app.feature_set != "full":
@@ -858,9 +915,10 @@ def simple_storage_collection(identity):
         simple_storage_controllers=simple_storage_controllers)
 
 
-@app.route('/redfish/v1/Systems/<identity>/SimpleStorage/<simple_storage_id>',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/SimpleStorage/{simple_storage_id}',
+    methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def simple_storage(identity, simple_storage_id):
     if app.feature_set != "full":
@@ -877,9 +935,9 @@ def simple_storage(identity, simple_storage_id):
                                simple_storage=storage_controller)
 
 
-@app.route('/redfish/v1/Systems/<identity>/Storage',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/Storage', methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def storage_collection(identity):
     if app.feature_set != "full":
@@ -894,9 +952,9 @@ def storage_collection(identity):
         storage_col=storage_col)
 
 
-@app.route('/redfish/v1/Systems/<identity>/Storage/<storage_id>',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/Storage/{storage_id}', methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def storage(identity, storage_id):
     if app.feature_set != "full":
@@ -913,9 +971,10 @@ def storage(identity, storage_id):
     raise error.NotFound()
 
 
-@app.route('/redfish/v1/Systems/<identity>/Storage/<stg_id>/Drives/<drv_id>',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/Storage/{stg_id}/Drives/{drv_id}',
+    methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def drive_resource(identity, stg_id, drv_id):
     if app.feature_set != "full":
@@ -932,17 +991,19 @@ def drive_resource(identity, stg_id, drv_id):
     raise error.NotFound()
 
 
-@app.route('/redfish/v1/Systems/<identity>/Storage/<storage_id>/Volumes',
-           methods=['GET', 'POST'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/Storage/{storage_id}/Volumes',
+    methods=['GET', 'POST'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
-def volumes_collection(identity, storage_id):
+def volumes_collection(request: fastapi.Request, identity, storage_id,
+                       body=fastapi.Depends(api_utils.json_body)):
     if app.feature_set != "full":
         raise error.FeatureNotAvailable("Storage")
 
     uuid = app.systems.uuid(identity)
 
-    if flask.request.method == 'GET':
+    if request.method == 'GET':
 
         vol_col = app.volumes.get_volumes_col(uuid, storage_id)
 
@@ -958,11 +1019,11 @@ def volumes_collection(identity, storage_id):
             'volume_collection.json', identity=identity,
             storage_id=storage_id, volume_col=vol_ids)
 
-    elif flask.request.method == 'POST':
+    elif request.method == 'POST':
         data = {
-            "Name": flask.request.json.get('Name'),
-            "VolumeType": flask.request.json.get('VolumeType'),
-            "CapacityBytes": flask.request.json.get('CapacityBytes'),
+            "Name": body.json.get('Name'),
+            "VolumeType": body.json.get('VolumeType'),
+            "CapacityBytes": body.json.get('CapacityBytes'),
             "Id": str(os.getpid()) + datetime.now().strftime("%H%M%S")
         }
         data['libvirtVolName'] = data['Id']
@@ -973,13 +1034,15 @@ def volumes_collection(identity, storage_id):
                              new_id)
             vol_url = ("/redfish/v1/Systems/%s/Storage/%s/"
                        "Volumes/%s" % (identity, storage_id, new_id))
-            return flask.Response(status=201,
-                                  headers={'Location': vol_url})
+            return responses.Response(status_code=201,
+                                      headers={'Location': vol_url},
+                                      media_type='text/html')
 
 
-@app.route('/redfish/v1/Systems/<identity>/Storage/<stg_id>/Volumes/<vol_id>',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/Systems/{identity}/Storage/{stg_id}/Volumes/{vol_id}',
+    methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def volume(identity, stg_id, vol_id):
     if app.feature_set != "full":
@@ -1001,7 +1064,7 @@ def volume(identity, stg_id, vol_id):
     raise error.NotFound()
 
 
-@app.route('/redfish/v1/Registries')
+@app.api_route('/redfish/v1/Registries', methods=['GET'])
 @api_utils.returns_json
 def registry_file_collection():
     if app.feature_set != "full":
@@ -1013,7 +1076,8 @@ def registry_file_collection():
         'registry_file_collection.json')
 
 
-@app.route('/redfish/v1/Registries/BiosAttributeRegistry.v1_0_0')
+@app.api_route('/redfish/v1/Registries/BiosAttributeRegistry.v1_0_0',
+               methods=['GET'])
 @api_utils.returns_json
 def bios_attribute_registry_file():
     if app.feature_set != "full":
@@ -1025,7 +1089,7 @@ def bios_attribute_registry_file():
         'bios_attribute_registry_file.json')
 
 
-@app.route('/redfish/v1/Registries/Messages')
+@app.api_route('/redfish/v1/Registries/Messages', methods=['GET'])
 @api_utils.returns_json
 def message_registry_file():
     if app.feature_set != "full":
@@ -1037,7 +1101,7 @@ def message_registry_file():
         'message_registry_file.json')
 
 
-@app.route('/redfish/v1/Systems/Bios/BiosRegistry')
+@app.api_route('/redfish/v1/Systems/Bios/BiosRegistry', methods=['GET'])
 @api_utils.returns_json
 def bios_registry():
     if app.feature_set != "full":
@@ -1048,7 +1112,7 @@ def bios_registry():
     return app.render_template('bios_registry.json')
 
 
-@app.route('/redfish/v1/Registries/Messages/Registry')
+@app.api_route('/redfish/v1/Registries/Messages/Registry', methods=['GET'])
 @api_utils.returns_json
 def message_registry():
     if app.feature_set != "full":
@@ -1059,17 +1123,17 @@ def message_registry():
     return app.render_template('message_registry.json')
 
 
-@app.route('/redfish/v1/TaskService',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/TaskService', methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def simple_task_service():
     return app.render_template('task_service.json')
 
 
-@app.route('/redfish/v1/TaskService/Tasks/42',
-           methods=['GET'])
-@api_utils.ensure_instance_access
+@app.api_route(
+    '/redfish/v1/TaskService/Tasks/42', methods=['GET'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
 def simple_task():
     return app.render_template('task.json')
@@ -1170,7 +1234,8 @@ def main():
     # Install the SIGCHLD handler to clean up zombie processes
     signal.signal(signal.SIGCHLD, cleanup_zombies)
 
-    app.debug = args.debug
+    if args.debug:
+        app.logger.setLevel(logging.DEBUG)
 
     app.configure(config_file=args.config)
 
@@ -1211,17 +1276,20 @@ def main():
     if args.storage_pool:
         app.config['SUSHY_EMULATOR_STORAGE_POOL'] = args.storage_pool
 
-    ssl_context = None
     ssl_certificate = app.config.get('SUSHY_EMULATOR_SSL_CERT')
     ssl_key = app.config.get('SUSHY_EMULATOR_SSL_KEY')
 
+    ssl_options = {}
     if ssl_certificate and ssl_key:
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-        ssl_context.load_cert_chain(ssl_certificate, ssl_key)
+        ssl_options = {'ssl_certfile': ssl_certificate,
+                       'ssl_keyfile': ssl_key,
+                       'ssl_version': ssl.PROTOCOL_TLSv1_2}
 
-    app.run(host=app.config.get('SUSHY_EMULATOR_LISTEN_IP'),
-            port=app.config.get('SUSHY_EMULATOR_LISTEN_PORT', 8000),
-            ssl_context=ssl_context)
+    uvicorn.run(app,
+                host=app.config.get('SUSHY_EMULATOR_LISTEN_IP') or '127.0.0.1',
+                port=app.config.get('SUSHY_EMULATOR_LISTEN_PORT', 8000),
+                log_level='debug' if args.debug else 'info',
+                **ssl_options)
 
     return 0
 

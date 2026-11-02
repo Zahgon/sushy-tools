@@ -10,47 +10,47 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import flask
+import fastapi
 
 from sushy_tools.emulator import api_utils
 from sushy_tools import error
 
 
-virtual_media = flask.Blueprint(
-    'VirtualMedia', __name__,
-    url_prefix='/redfish/v1/Systems/<identity>/VirtualMedia')
+virtual_media = fastapi.APIRouter(
+    prefix='/redfish/v1/Systems/{identity}/VirtualMedia',
+    route_class=api_utils.RedfishRoute)
 
 
-@virtual_media.route('', methods=['GET'])
+@virtual_media.api_route('', methods=['GET'])
 @api_utils.returns_json
-def virtual_media_collection_resource(identity):
+def virtual_media_collection_resource(request: fastapi.Request, identity):
     api_utils.debug('Serving virtual media resources for system "%s"',
                     identity)
 
-    return flask.render_template(
+    return request.app.render_template(
         'virtual_media_collection.json',
         identity=identity,
-        uuid=flask.current_app.systems.uuid(identity),
-        devices=flask.current_app.vmedia.devices
+        uuid=request.app.systems.uuid(identity),
+        devices=request.app.vmedia.devices
     )
 
 
-@virtual_media.route('/<device>', methods=['GET'])
+@virtual_media.api_route('/{device}', methods=['GET'])
 @api_utils.returns_json
-def virtual_media_resource(identity, device):
-    device_name = flask.current_app.vmedia.get_device_name(
+def virtual_media_resource(request: fastapi.Request, identity, device):
+    device_name = request.app.vmedia.get_device_name(
         identity, device)
 
-    media_types = flask.current_app.vmedia.get_device_media_types(
+    media_types = request.app.vmedia.get_device_media_types(
         identity, device)
 
-    device_info = flask.current_app.vmedia.get_device_image_info(
+    device_info = request.app.vmedia.get_device_image_info(
         identity, device)
 
     api_utils.debug('Serving virtual media %s at system "%s"',
                     device, identity)
 
-    return flask.render_template(
+    return request.app.render_template(
         'virtual_media.json',
         identity=identity,
         device=device,
@@ -66,52 +66,54 @@ def virtual_media_resource(identity, device):
     )
 
 
-@virtual_media.route('/<device>', methods=['PATCH'])
+@virtual_media.api_route('/{device}', methods=['PATCH'])
 @api_utils.returns_json
-def virtual_media_patch(identity, device):
-    flask.current_app.systems.uuid(identity)
-    if not flask.request.json:
+def virtual_media_patch(request: fastapi.Request, identity, device,
+                        body=fastapi.Depends(api_utils.json_body)):
+    request.app.systems.uuid(identity)
+    if not body.json:
         raise error.BadRequest("Empty or malformed patch")
 
     api_utils.debug('Updating virtual media %s at system "%s"',
                     device, identity)
 
-    verify = flask.request.json.get('VerifyCertificate')
+    verify = body.json.get('VerifyCertificate')
     if verify is not None:
         if not isinstance(verify, bool):
             raise error.BadRequest("VerifyCertificate must be a boolean")
 
-        flask.current_app.vmedia.update_device_info(
+        request.app.vmedia.update_device_info(
             identity, device, verify=verify)
         return '', 204
     else:
         raise error.BadRequest("Empty or malformed patch")
 
 
-@virtual_media.route('/<device>/Certificates', methods=['GET'])
+@virtual_media.api_route('/{device}/Certificates', methods=['GET'])
 @api_utils.returns_json
-def virtual_media_certificates(identity, device):
-    flask.current_app.systems.uuid(identity)
+def virtual_media_certificates(request: fastapi.Request, identity, device):
+    request.app.systems.uuid(identity)
     location = \
         f'/redfish/v1/Systems/{identity}/VirtualMedia/{device}/Certificates'
-    certificates = flask.current_app.vmedia.list_certificates(identity, device)
-    return flask.render_template(
+    certificates = request.app.vmedia.list_certificates(identity, device)
+    return request.app.render_template(
         'certificate_collection.json',
         location=location,
         certificates=[cert.id for cert in certificates],
     )
 
 
-@virtual_media.route('/<device>/Certificates', methods=['POST'])
+@virtual_media.api_route('/{device}/Certificates', methods=['POST'])
 @api_utils.returns_json
-def virtual_media_add_certificate(identity, device):
-    flask.current_app.systems.uuid(identity)
-    if not flask.request.json:
+def virtual_media_add_certificate(request: fastapi.Request, identity, device,
+                                  body=fastapi.Depends(api_utils.json_body)):
+    request.app.systems.uuid(identity)
+    if not body.json:
         raise error.BadRequest("Empty or malformed certificate")
 
     try:
-        cert_string = flask.request.json['CertificateString']
-        cert_type = flask.request.json['CertificateType']
+        cert_string = body.json['CertificateString']
+        cert_type = body.json['CertificateType']
     except KeyError as exc:
         raise error.BadRequest(f"Missing required parameter {exc}")
 
@@ -122,7 +124,7 @@ def virtual_media_add_certificate(identity, device):
     api_utils.debug('Adding certificate for virtual media %s at '
                     'system "%s"', device, identity)
 
-    cert = flask.current_app.vmedia.add_certificate(
+    cert = request.app.vmedia.add_certificate(
         identity, device, cert_string, cert_type)
 
     location = (
@@ -132,21 +134,22 @@ def virtual_media_add_certificate(identity, device):
     return '', 204, {'Location': location}
 
 
-@virtual_media.route('/<device>/Certificates/<cert_id>', methods=['GET'])
+@virtual_media.api_route('/{device}/Certificates/{cert_id}', methods=['GET'])
 @api_utils.returns_json
-def virtual_media_get_certificate(identity, device, cert_id):
-    flask.current_app.systems.uuid(identity)
+def virtual_media_get_certificate(request: fastapi.Request, identity, device,
+                                  cert_id):
+    request.app.systems.uuid(identity)
     location = (
         f'/redfish/v1/Systems/{identity}/VirtualMedia/{device}'
         f'/Certificates/{cert_id}'
     )
-    certificates = flask.current_app.vmedia.list_certificates(identity, device)
+    certificates = request.app.vmedia.list_certificates(identity, device)
     try:
         cert = next(c for c in certificates if c.id == cert_id)
     except StopIteration:
         raise error.NotFound()
 
-    return flask.render_template(
+    return request.app.render_template(
         'certificate.json',
         location=location,
         cert_id=cert.id,
@@ -155,38 +158,41 @@ def virtual_media_get_certificate(identity, device, cert_id):
     )
 
 
-@virtual_media.route('/<device>/Certificates/<cert_id>', methods=['DELETE'])
+@virtual_media.api_route('/{device}/Certificates/{cert_id}',
+                         methods=['DELETE'])
 @api_utils.returns_json
-def virtual_media_delete_certificate(identity, device, cert_id):
-    flask.current_app.systems.uuid(identity)
+def virtual_media_delete_certificate(request: fastapi.Request, identity,
+                                     device, cert_id):
+    request.app.systems.uuid(identity)
     api_utils.debug('Removing certificate %s for virtual media %s at '
                     'system "%s"', cert_id, device, identity)
-    flask.current_app.vmedia.delete_certificate(identity, device, cert_id)
+    request.app.vmedia.delete_certificate(identity, device, cert_id)
     return '', 204
 
 
-@virtual_media.route('/<device>/Actions/VirtualMedia.InsertMedia',
-                     methods=['POST'])
+@virtual_media.api_route('/{device}/Actions/VirtualMedia.InsertMedia',
+                         methods=['POST'])
 @api_utils.returns_json
-def virtual_media_insert(identity, device):
-    image = flask.request.json.get('Image')
-    inserted = flask.request.json.get('Inserted', True)
-    write_protected = flask.request.json.get('WriteProtected', True)
-    username = flask.request.json.get('UserName', '')
-    password = flask.request.json.get('Password', '')
+def virtual_media_insert(request: fastapi.Request, identity, device,
+                         body=fastapi.Depends(api_utils.json_body)):
+    image = body.json.get('Image')
+    inserted = body.json.get('Inserted', True)
+    write_protected = body.json.get('WriteProtected', True)
+    username = body.json.get('UserName', '')
+    password = body.json.get('Password', '')
 
     if (not username and password) or (username and not password):
         message = "UserName and Password must be passed together"
-        return flask.render_template('error.json', message=message), 400
+        return request.app.render_template('error.json', message=message), 400
 
-    system = flask.current_app.systems.uuid(identity)
+    system = request.app.systems.uuid(identity)
 
-    image_path = flask.current_app.vmedia.insert_image(
+    image_path = request.app.vmedia.insert_image(
         identity, device, image, inserted, write_protected,
         username=username, password=password)
 
     try:
-        flask.current_app.systems.set_boot_image(
+        request.app.systems.set_boot_image(
             system, device, boot_image=image_path,
             write_protected=write_protected)
 
@@ -204,14 +210,14 @@ def virtual_media_insert(identity, device):
     return '', 204
 
 
-@virtual_media.route('/<device>/Actions/VirtualMedia.EjectMedia',
-                     methods=['POST'])
+@virtual_media.api_route('/{device}/Actions/VirtualMedia.EjectMedia',
+                         methods=['POST'])
 @api_utils.returns_json
-def virtual_media_eject(identity, device):
-    flask.current_app.vmedia.eject_image(identity, device)
+def virtual_media_eject(request: fastapi.Request, identity, device):
+    request.app.vmedia.eject_image(identity, device)
 
     try:
-        flask.current_app.systems.set_boot_image(identity, device)
+        request.app.systems.set_boot_image(identity, device)
 
     except error.NotSupportedError as ex:
         api_utils.warning(

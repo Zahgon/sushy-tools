@@ -1,0 +1,9 @@
+---
+upgrade:
+  - |
+    The dynamic Redfish emulator is now a FastAPI (ASGI) application served
+    by uvicorn instead of a Flask application served by the Werkzeug
+    development server. Flask, Werkzeug and WebOb are no longer
+    dependencies; FastAPI, uvicorn and Jinja2 are required instead. The
+    ``sushy-emulator`` command and its options are unchanged, and
+    ``sushy_tools.emulator.main:app`` can be served by any ASGI server.

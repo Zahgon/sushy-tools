@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import asyncio
 import base64
 import json
 import os
@@ -38,37 +39,44 @@ class TestAuthBasic(base.TestCase):
         auth_file = self.write_auth_file(
             'myName:$2y$05$lE3eGtyj41jZwrzS87KTqe6.'
             'JETVCWBkc32C63UP2aYrGoYOEpbJm\n\n\n')
-        app = mock.Mock()
-        start_response = mock.Mock()
+        app = mock.AsyncMock()
+        send = mock.AsyncMock()
         middleware = auth_basic.BasicAuthMiddleware(app, auth_file)
-        env = {
-            'HTTP_AUTHORIZATION': 'Basic bXlOYW1lOm15UGFzc3dvcmQ='
+        scope = {
+            'type': 'http',
+            'headers': [(b'authorization', b'Basic bXlOYW1lOm15UGFzc3dvcmQ=')]
         }
 
-        result = middleware(env, start_response)
-        self.assertEqual(app.return_value, result)
-        start_response.assert_not_called()
+        asyncio.run(middleware(scope, mock.sentinel.receive, send))
+        app.assert_awaited_once_with(
+            {'type': 'http',
+             'headers': [(b'x-user', b'myName'), (b'x-user-name', b'myName')]},
+            mock.sentinel.receive, send)
+        send.assert_not_called()
 
     def test_middleware_unauthenticated(self):
         auth_file = self.write_auth_file(
             'myName:$2y$05$lE3eGtyj41jZwrzS87KTqe6.'
             'JETVCWBkc32C63UP2aYrGoYOEpbJm\n\n\n')
-        app = mock.Mock()
-        start_response = mock.Mock()
+        app = mock.AsyncMock()
+        send = mock.AsyncMock()
         middleware = auth_basic.BasicAuthMiddleware(app, auth_file)
-        env = {'REQUEST_METHOD': 'GET'}
+        scope = {'type': 'http', 'method': 'GET', 'headers': []}
 
-        body = middleware(env, start_response)
-        decoded = json.loads(body[0].decode())
+        asyncio.run(middleware(scope, mock.sentinel.receive, send))
+        start, body = [call.args[0] for call in send.await_args_list]
+        decoded = json.loads(body['body'].decode())
         self.assertEqual({'error': {'message': 'Authorization required',
                                     'code': 401}}, decoded)
 
-        start_response.assert_called_once_with(
-            '401 Unauthorized',
-            [('WWW-Authenticate', 'Basic realm="Baremetal API"'),
-             ('Content-Type', 'application/json'),
-             ('Content-Length', str(len(body[0])))]
-        )
+        self.assertEqual(
+            {'type': 'http.response.start',
+             'status': 401,
+             'headers': [
+                 (b'www-authenticate', b'Basic realm="Baremetal API"'),
+                 (b'content-length', str(len(body['body'])).encode()),
+                 (b'content-type', b'application/json')]},
+            start)
         app.assert_not_called()
 
     def test_authenticate(self):

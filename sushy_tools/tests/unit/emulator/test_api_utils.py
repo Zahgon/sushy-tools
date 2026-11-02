@@ -19,31 +19,31 @@ from sushy_tools.tests.unit.emulator import test_main
 
 class InstanceDeniedTestCase(test_main.EmulatorTestCase):
 
-    def setUp(self):
-        super().setUp()
-        ctx = main.app.app_context().__enter__()
-        self.addCleanup(lambda: ctx.__exit__(None, None, None))
-
     @mock.patch.dict(main.app.config, {}, clear=True)
     def test_instance_denied_allow_all(self):
-        self.assertFalse(api_utils.instance_denied(identity='x'))
+        self.assertFalse(
+            api_utils.instance_denied(main.app.config, identity='x'))
 
     @mock.patch.dict(
         main.app.config, {'SUSHY_EMULATOR_ALLOWED_INSTANCES': {}})
     def test_instance_denied_disallow_all(self):
-        self.assertTrue(api_utils.instance_denied(identity='a'))
+        self.assertTrue(
+            api_utils.instance_denied(main.app.config, identity='a'))
 
     def test_instance_denied_undefined_option(self):
         with mock.patch.dict(main.app.config):
             main.app.config.pop('SUSHY_EMULATOR_ALLOWED_INSTANCES', None)
-            self.assertFalse(api_utils.instance_denied(identity='a'))
+            self.assertFalse(
+                api_utils.instance_denied(main.app.config, identity='a'))
 
     @mock.patch.dict(
         main.app.config, {'SUSHY_EMULATOR_ALLOWED_INSTANCES': {'a'}})
     def test_instance_denied_allow_some(self):
-        self.assertFalse(api_utils.instance_denied(identity='a'))
+        self.assertFalse(
+            api_utils.instance_denied(main.app.config, identity='a'))
 
     @mock.patch.dict(
         main.app.config, {'SUSHY_EMULATOR_ALLOWED_INSTANCES': {'a'}})
     def test_instance_denied_disallow_some(self):
-        self.assertTrue(api_utils.instance_denied(identity='b'))
+        self.assertTrue(
+            api_utils.instance_denied(main.app.config, identity='b'))

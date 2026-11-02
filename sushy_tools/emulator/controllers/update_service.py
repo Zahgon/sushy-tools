@@ -10,57 +10,60 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import flask
+import fastapi
 
 from sushy_tools.emulator import api_utils
 from sushy_tools import error
 
 
-update_service = flask.Blueprint(
-    'UpdateService', __name__,
-    url_prefix='/redfish/v1/UpdateService/')
+update_service = fastapi.APIRouter(
+    prefix='/redfish/v1/UpdateService',
+    route_class=api_utils.RedfishRoute)
 
 
-@update_service.route('', methods=['GET'])
+@update_service.api_route('/', methods=['GET'])
 @api_utils.returns_json
-def update_service_resource():
+def update_service_resource(request: fastapi.Request):
     api_utils.debug('Serving update service resources')
 
-    return flask.render_template(
+    return request.app.render_template(
         'update_service.json'
     )
 
 
-@update_service.route('/FirmwareInventory', methods=['GET'])
+@update_service.api_route('/FirmwareInventory', methods=['GET'])
 @api_utils.returns_json
-def firmware_inventory_collection():
-    if flask.current_app.feature_set != "full":
+def firmware_inventory_collection(request: fastapi.Request):
+    if request.app.feature_set != "full":
         raise error.FeatureNotAvailable("FirmwareInventory")
 
     # Stub: advertise an empty firmware inventory (no members).
     api_utils.debug('Serving firmware inventory (stub, empty collection)')
-    return flask.render_template('firmware_inventory_collection.json')
+    return request.app.render_template('firmware_inventory_collection.json')
 
 
-@update_service.route('/Actions/UpdateService.SimpleUpdate',
-                      methods=['POST'])
+@update_service.api_route('/Actions/UpdateService.SimpleUpdate',
+                          methods=['POST'])
 @api_utils.returns_json
-def update_service_simple_update():
-    image_uri = flask.request.json.get('ImageURI')
-    targets = flask.request.json.get('Targets')
+def update_service_simple_update(request: fastapi.Request,
+                                 body=fastapi.Depends(api_utils.json_body)):
+    image_uri = body.json.get('ImageURI')
+    targets = body.json.get('Targets')
     api_utils.debug('Received Targets: "%s"', targets)
     if not image_uri or not targets:
         message = "Missing ImageURI and/or Targets."
-        return flask.render_template('error.json', message=message), 400
+        return request.app.render_template('error.json', message=message), 400
 
     for target in targets:
         # NOTE(janders) since we only support BIOS let's ignore Manager targets
         if "Manager" in target:
             message = "Manager is not currently a supported Target."
-            return flask.render_template('error.json', message=message), 400
+            return (request.app.render_template('error.json',
+                                                message=message),
+                    400)
         try:
             name = target.rstrip("/").rsplit('/', 1)[-1]
-            uuid = flask.current_app.systems.uuid(name)
+            uuid = request.app.systems.uuid(name)
         except error.AliasAccessError as exc:
             api_utils.debug('Received a redirect in response to GET System '
                             '"%s". New System ID: "%s"', name, exc)
@@ -75,14 +78,16 @@ def update_service_simple_update():
         api_utils.debug('Fetching BIOS information for System "%s"',
                         uuid)
         try:
-            versions = flask.current_app.systems.get_versions(uuid)
+            versions = request.app.systems.get_versions(uuid)
 
         except error.NotSupportedError as ex:
             api_utils.warning(
                 'System failed to fetch BIOS information with exception %s',
                 ex)
             message = "Failed fetching BIOS information"
-            return flask.render_template('error.json', message=message), 500
+            return (request.app.render_template('error.json',
+                                                message=message),
+                    500)
 
         bios_version = versions.get('BiosVersion')
 
@@ -96,13 +101,15 @@ def update_service_simple_update():
         firmware_versions = {"BiosVersion": bios_version}
 
         try:
-            flask.current_app.systems.set_pending_versions(
+            request.app.systems.set_pending_versions(
                 uuid, firmware_versions)
         except error.NotSupportedError as ex:
             api_utils.warning('System failed to update bios with exception %s',
                               ex)
             message = "Failed updating BIOS version"
-            return flask.render_template('error.json', message=message), 500
+            return (request.app.render_template('error.json',
+                                                message=message),
+                    500)
 
         api_utils.info(
             'Emulated BIOS upgrade staged for System %s, '

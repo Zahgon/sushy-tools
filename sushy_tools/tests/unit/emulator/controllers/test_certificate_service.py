@@ -24,7 +24,7 @@ class CertificateServiceTestCase(test_main.EmulatorTestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertIn('#CertificateService.ReplaceCertificate',
-                      response.json['Actions'])
+                      response.json()['Actions'])
 
     def test_replace_ok(self, managers_mock, vmedia_mock):
         response = self.app.post(
@@ -121,4 +121,4 @@ class CertificateServiceTestCase(test_main.EmulatorTestCase):
             ['/redfish/v1/Managers/1/VirtualMedia/DVD/Certificates/cert1',
              '/redfish/v1/Managers/2/VirtualMedia/CD/Certificates/cert2'],
             [item['@odata.id']
-             for item in response.json['Links']['Certificates']])
+             for item in response.json()['Links']['Certificates']])

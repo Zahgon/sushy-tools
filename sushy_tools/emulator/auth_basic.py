@@ -18,7 +18,7 @@ import binascii
 import logging
 
 import bcrypt
-import webob
+from fastapi import responses
 
 from sushy_tools import error
 
@@ -34,28 +34,36 @@ class BasicAuthMiddleware(object):
         self.auth_file = auth_file
         validate_auth_file(auth_file)
 
+    def error_body(self, e):
+        return {'error': {'message': str(e), 'code': e.code}}
+
     def format_exception(self, e):
-        result = {'error': {'message': str(e), 'code': e.code}}
-        headers = list(e.headers.items()) + [
-            ('Content-Type', 'application/json')
-        ]
-        return webob.Response(content_type='application/json',
-                              status_code=e.code,
-                              json_body=result,
-                              headerlist=headers)
+        return responses.JSONResponse(self.error_body(e), status_code=e.code,
+                                      headers=dict(e.headers))
 
-    def __call__(self, env, start_response):
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http':
+            await self.app(scope, receive, send)
+            return
 
+        env = {'HTTP_' + name.decode('latin-1').upper().replace('-', '_'):
+               value.decode('latin-1')
+               for name, value in scope['headers']}
         try:
             token = parse_header(env)
             username, password = parse_token(token)
-            env.update(authenticate(self.auth_file, username, password))
-
-            return self.app(env, start_response)
+            user = authenticate(self.auth_file, username, password)
 
         except error.FishyError as e:
             response = self.format_exception(e)
-            return response(env, start_response)
+            await response(scope, receive, send)
+            return
+
+        headers = [(name, value) for name, value in scope['headers']
+                   if name != b'authorization']
+        headers += [(key[5:].lower().replace('_', '-').encode('latin-1'),
+                     value.encode('utf-8')) for key, value in user.items()]
+        await self.app(dict(scope, headers=headers), receive, send)
 
 
 def authenticate(auth_file, username, password):
@@ -70,7 +78,7 @@ def authenticate(auth_file, username, password):
     :param: auth_file: Path to user auth file
     :param: username: Username to authenticate
     :param: password: Password encoded as bytes
-    :returns: A dictionary of WSGI environment values to append to the request
+    :returns: A dictionary of CGI-style header values to add to the request
     :raises: Unauthorized, if no file entries match supplied username/password
     """
     line_prefix = username + ':'
@@ -94,7 +102,7 @@ def auth_entry(entry, password):
 
     :param: entry: Line from auth user file to use for authentication
     :param: password: Password encoded as bytes
-    :returns: A dictionary of WSGI environment values to append to the request
+    :returns: A dictionary of CGI-style header values to add to the request
     :raises: Unauthorized, if the entry doesn't match supplied password or
         if the entry is encrypted with a method other than bcrypt
     """
@@ -166,9 +174,9 @@ def parse_token(token):
 
 
 def parse_header(env):
-    """Parse WSGI environment for Authorization header of type Basic
+    """Parse request headers for Authorization header of type Basic
 
-    :param: env: WSGI environment to get header from
+    :param: env: CGI-style mapping of request headers to get header from
     :returns: Token portion of the header value
     :raises: Unauthorized, if header is missing or if the type is not Basic
     """

@@ -12,15 +12,15 @@
 
 import re
 
-import flask
+import fastapi
 
 from sushy_tools.emulator import api_utils
 from sushy_tools import error
 
 
-certificate_service = flask.Blueprint(
-    'CertificateService', __name__,
-    url_prefix='/redfish/v1/CertificateService')
+certificate_service = fastapi.APIRouter(
+    prefix='/redfish/v1/CertificateService',
+    route_class=api_utils.RedfishRoute)
 
 
 _VMEDIA_URI_PATTERN = re.compile(
@@ -28,22 +28,22 @@ _VMEDIA_URI_PATTERN = re.compile(
 )
 
 
-@certificate_service.route('', methods=['GET'])
+@certificate_service.api_route('', methods=['GET'])
 @api_utils.returns_json
-def certificate_service_resource():
+def certificate_service_resource(request: fastapi.Request):
     api_utils.debug('Serving certificate service')
-    return flask.render_template('certificate_service.json')
+    return request.app.render_template('certificate_service.json')
 
 
-@certificate_service.route('/CertificateLocations', methods=['GET'])
+@certificate_service.api_route('/CertificateLocations', methods=['GET'])
 @api_utils.returns_json
-def certificate_service_locations():
+def certificate_service_locations(request: fastapi.Request):
     api_utils.debug('Serving certificate locations')
     locations = []
-    for mgr in flask.current_app.managers.managers:
-        for dev in flask.current_app.vmedia.devices:
+    for mgr in request.app.managers.managers:
+        for dev in request.app.vmedia.devices:
             try:
-                certs = flask.current_app.vmedia.list_certificates(mgr, dev)
+                certs = request.app.vmedia.list_certificates(mgr, dev)
             except error.NotFound:
                 api_utils.debug('No certificates for manager %s, virtual '
                                 'media device %s', mgr, dev)
@@ -55,22 +55,24 @@ def certificate_service_locations():
                     f'/Certificates/{cert.id}'
                 )
 
-    return flask.render_template('certificate_locations.json',
-                                 certificates=locations)
+    return request.app.render_template('certificate_locations.json',
+                                       certificates=locations)
 
 
-@certificate_service.route('/Actions/CertificateService.ReplaceCertificate',
-                           methods=['POST'])
-@api_utils.ensure_instance_access
+@certificate_service.api_route(
+    '/Actions/CertificateService.ReplaceCertificate', methods=['POST'],
+    dependencies=[fastapi.Depends(api_utils.ensure_instance_access)])
 @api_utils.returns_json
-def certificate_service_replace_certificate():
-    if not flask.request.json:
+def certificate_service_replace_certificate(
+        request: fastapi.Request,
+        body=fastapi.Depends(api_utils.json_body)):
+    if not body.json:
         raise error.BadRequest("Empty or malformed certificate")
 
     try:
-        cert_string = flask.request.json['CertificateString']
-        cert_type = flask.request.json['CertificateType']
-        cert_uri = flask.request.json['CertificateUri']
+        cert_string = body.json['CertificateString']
+        cert_type = body.json['CertificateType']
+        cert_uri = body.json['CertificateUri']
     except KeyError as exc:
         raise error.BadRequest(f"Missing required parameter {exc}")
 
@@ -85,8 +87,8 @@ def certificate_service_replace_certificate():
 
     manager_id, device, cert_id = match.groups()
 
-    flask.current_app.managers.get_manager(manager_id)
-    flask.current_app.vmedia.replace_certificate(
+    request.app.managers.get_manager(manager_id)
+    request.app.vmedia.replace_certificate(
         manager_id, device, cert_id, cert_string, cert_type)
 
     return '', 204

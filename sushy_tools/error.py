@@ -14,6 +14,9 @@
 #    under the License.
 
 
+import http
+
+
 class FishyError(Exception):
     """Create generic sushy-tools exception object"""
 
@@ -75,3 +78,39 @@ class Unauthorized(FishyError):
     def __init__(self, msg, code=401):
         self.headers = {'WWW-Authenticate': 'Basic realm="Baremetal API"'}
         super().__init__(msg, code)
+
+
+class InvalidJSONBody(FishyError):
+    """Request body is not valid JSON."""
+
+    def __init__(self, code=400):
+        super().__init__('400 Bad Request: The browser (or proxy) sent a '
+                         'request that this server could not understand.',
+                         code)
+
+
+class UnsupportedMediaType(FishyError):
+    """Request body read as JSON is not declared as JSON."""
+
+    def __init__(self, code=415):
+        super().__init__('415 Unsupported Media Type: Did not attempt to load '
+                         'JSON data because the request Content-Type was not '
+                         "'application/json'.", code)
+
+
+class HTTPError(FishyError):
+    """HTTP error reported with its status line and description."""
+
+    _DESCRIPTIONS = {
+        404: ('The requested URL was not found on the server. If you entered '
+              'the URL manually please check your spelling and try again.'),
+        405: 'The method is not allowed for the requested URL.',
+        500: ('The server encountered an internal error and was unable to '
+              'complete your request. Either the server is overloaded or '
+              'there is an error in the application.'),
+    }
+
+    def __init__(self, code):
+        phrase = http.HTTPStatus(code).phrase
+        description = self._DESCRIPTIONS.get(code, '')
+        super().__init__(f'{code} {phrase}: {description}', code)

@@ -42,21 +42,21 @@ class UpdateServiceTestCase(test_main.EmulatorTestCase):
         self.assertEqual(200, resp.status_code)
 
         self.assertEqual('/redfish/v1/$metadata#UpdateService.UpdateService',
-                         resp.json['@odata.context'])
-        self.assertEqual('/redfish/v1/UpdateService', resp.json['@odata.id'])
+                         resp.json()['@odata.context'])
+        self.assertEqual('/redfish/v1/UpdateService', resp.json()['@odata.id'])
         self.assertEqual('#UpdateService.v1_11_0.UpdateService',
-                         resp.json['@odata.type'])
-        self.assertEqual(actions, resp.json['Actions'])
+                         resp.json()['@odata.type'])
+        self.assertEqual(actions, resp.json()['Actions'])
         self.assertEqual('Represents the properties for the Update Service',
-                         resp.json['Description'])
-        self.assertEqual(firmwareinventory, resp.json['FirmwareInventory'])
+                         resp.json()['Description'])
+        self.assertEqual(firmwareinventory, resp.json()['FirmwareInventory'])
         self.assertEqual('/redfish/v1/UpdateService/FirmwareInventory',
-                         resp.json['HttpPushUri'])
-        self.assertEqual('UpdateService', resp.json['Id'])
-        self.assertIsNone(resp.json['MaxImageSizeBytes'])
-        self.assertEqual('Update Service', resp.json['Name'])
-        self.assertTrue(resp.json['ServiceEnabled'])
-        self.assertEqual(softwareinventory, resp.json['SoftwareInventory'])
+                         resp.json()['HttpPushUri'])
+        self.assertEqual('UpdateService', resp.json()['Id'])
+        self.assertIsNone(resp.json()['MaxImageSizeBytes'])
+        self.assertEqual('Update Service', resp.json()['Name'])
+        self.assertTrue(resp.json()['ServiceEnabled'])
+        self.assertEqual(softwareinventory, resp.json()['SoftwareInventory'])
 
     def test_firmware_inventory_get(self):
         resp = self.app.get('/redfish/v1/UpdateService/FirmwareInventory')
@@ -91,8 +91,8 @@ class UpdateServiceTestCase(test_main.EmulatorTestCase):
 
         resp = self.app.get('/redfish/v1/Systems/zzzz-yyyy-xxxx')
         self.assertEqual(200, resp.status_code)
-        self.assertEqual('zzzz-yyyy-xxxx', resp.json['Id'])
-        self.assertEqual('1.0.0', resp.json['BiosVersion'])
+        self.assertEqual('zzzz-yyyy-xxxx', resp.json()['Id'])
+        self.assertEqual('1.0.0', resp.json()['BiosVersion'])
         get_versions.assert_called()
 
         args = {
@@ -116,9 +116,9 @@ class UpdateServiceTestCase(test_main.EmulatorTestCase):
         response = self.app.post('/redfish/v1/UpdateService/Actions/'
                                  'UpdateService.SimpleUpdate', json=args)
         self.assertEqual('Base.1.0.GeneralError',
-                         response.json['error']['code'])
+                         response.json()['error']['code'])
         self.assertEqual('Missing ImageURI and/or Targets.',
-                         response.json['error']['message'])
+                         response.json()['error']['message'])
 
     @test_main.patch_resource('systems')
     def test_update_service_simpleupdate_manager(self, systems_mock):
@@ -135,5 +135,5 @@ class UpdateServiceTestCase(test_main.EmulatorTestCase):
                                  'UpdateService.SimpleUpdate', json=args)
         self.assertEqual(400, response.status_code)
         self.assertEqual('Manager is not currently a supported Target.',
-                         response.json['error']['message'])
+                         response.json()['error']['message'])
         set_versions.assert_not_called()

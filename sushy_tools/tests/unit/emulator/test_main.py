@@ -15,6 +15,7 @@ import signal
 import tempfile
 from unittest import mock
 
+from fastapi import testclient
 from oslotest import base
 
 from sushy_tools.emulator import main
@@ -34,7 +35,7 @@ class EmulatorTestCase(base.BaseTestCase):
     uuid = 'c7a5fdbd-cdaf-9455-926a-d65c16db1809'
 
     def setUp(self):
-        self.app = main.app.test_client()
+        self.app = testclient.TestClient(main.app, follow_redirects=False)
 
         super(EmulatorTestCase, self).setUp()
 
@@ -58,7 +59,7 @@ class CommonTestCase(EmulatorTestCase):
     def test_root_resource(self):
         response = self.app.get('/redfish/v1/')
         self.assertEqual(200, response.status_code)
-        self.assertEqual('RedvirtService', response.json['Id'])
+        self.assertEqual('RedvirtService', response.json()['Id'])
 
     def test_root_resource_only_vmedia(self):
         self.set_feature_set("vmedia")
@@ -66,7 +67,7 @@ class CommonTestCase(EmulatorTestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(
             {'Id', 'Name', 'RedfishVersion', 'UUID', 'Systems', 'Managers'},
-            {x for x in response.json if not x.startswith('@')})
+            {x for x in response.json() if not x.startswith('@')})
 
     def test_root_resource_minimum(self):
         self.set_feature_set("minimum")
@@ -74,7 +75,7 @@ class CommonTestCase(EmulatorTestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(
             {'Id', 'Name', 'RedfishVersion', 'UUID', 'Systems'},
-            {x for x in response.json if not x.startswith('@')})
+            {x for x in response.json() if not x.startswith('@')})
 
 
 TEST_PASSWD = \
@@ -92,21 +93,21 @@ class AuthenticatedTestCase(base.BaseTestCase):
         app = main.Application()
         app.configure(
             extra_config={'SUSHY_EMULATOR_AUTH_FILE': self.auth_file.name})
-        self.app = app.test_client()
+        self.app = testclient.TestClient(app)
 
     def test_root_resource(self):
         response = self.app.get('/redfish/v1/')
         # 404 because this application does not have any routes
-        self.assertEqual(404, response.status_code, response.data)
+        self.assertEqual(404, response.status_code, response.content)
 
     def test_authenticated_resource(self):
         response = self.app.get('/redfish/v1/Systems/',
                                 auth=('admin', 'password'))
-        self.assertEqual(404, response.status_code, response.data)
+        self.assertEqual(404, response.status_code, response.content)
 
     def test_authentication_failed(self):
         response = self.app.get('/redfish/v1/Systems/')
-        self.assertEqual(401, response.status_code, response.data)
+        self.assertEqual(401, response.status_code, response.content)
 
 
 class ChassisTestCase(EmulatorTestCase):
@@ -117,9 +118,9 @@ class ChassisTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Chassis')
         self.assertEqual(200, response.status_code)
         self.assertEqual({'@odata.id': '/redfish/v1/Chassis/chassis0'},
-                         response.json['Members'][0])
+                         response.json()['Members'][0])
         self.assertEqual({'@odata.id': '/redfish/v1/Chassis/chassis1'},
-                         response.json['Members'][1])
+                         response.json()['Members'][1])
 
     @patch_resource('indicators')
     @patch_resource('systems')
@@ -138,18 +139,18 @@ class ChassisTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Chassis/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('xxxx-yyyy-zzzz', response.json['Id'])
-        self.assertEqual('xxxx-yyyy-zzzz', response.json['UUID'])
-        self.assertEqual('Off', response.json['IndicatorLED'])
+        self.assertEqual('xxxx-yyyy-zzzz', response.json()['Id'])
+        self.assertEqual('xxxx-yyyy-zzzz', response.json()['UUID'])
+        self.assertEqual('Off', response.json()['IndicatorLED'])
         self.assertEqual(
             {'@odata.id': '/redfish/v1/Chassis/xxxx-yyyy-zzzz/Thermal'},
-            response.json['Thermal'])
+            response.json()['Thermal'])
         self.assertEqual([{'@odata.id': '/redfish/v1/Systems/sys1'}],
-                         response.json['Links']['ComputerSystems'])
+                         response.json()['Links']['ComputerSystems'])
         self.assertEqual([{'@odata.id': '/redfish/v1/Managers/man1'}],
-                         response.json['Links']['ManagedBy'])
+                         response.json()['Links']['ManagedBy'])
         self.assertEqual([{'@odata.id': '/redfish/v1/Managers/man1'}],
-                         response.json['Links']['ManagersInChassis'])
+                         response.json()['Links']['ManagersInChassis'])
 
     @patch_resource('systems')
     @patch_resource('chassis')
@@ -162,19 +163,19 @@ class ChassisTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Chassis/xxxx-yyyy-zzzz/Thermal')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('Thermal', response.json['Id'])
+        self.assertEqual('Thermal', response.json()['Id'])
         self.assertEqual(
             '/redfish/v1/Chassis/xxxx-yyyy-zzzz/Thermal#/Temperatures/0',
-            response.json['Temperatures'][0]['@odata.id'])
+            response.json()['Temperatures'][0]['@odata.id'])
         self.assertEqual(
             {'@odata.id': '/redfish/v1/Systems/sys1/Processors/CPU'},
-            response.json['Temperatures'][0]['RelatedItem'][0])
+            response.json()['Temperatures'][0]['RelatedItem'][0])
         self.assertEqual(
             '/redfish/v1/Chassis/xxxx-yyyy-zzzz/Thermal#/Fans/0',
-            response.json['Fans'][0]['@odata.id'])
+            response.json()['Fans'][0]['@odata.id'])
         self.assertEqual(
             {'@odata.id': '/redfish/v1/Chassis/xxxx-yyyy-zzzz'},
-            response.json['Fans'][0]['RelatedItem'][0])
+            response.json()['Fans'][0]['RelatedItem'][0])
 
     @patch_resource('indicators')
     @patch_resource('chassis')
@@ -208,9 +209,9 @@ class ManagersTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Managers')
         self.assertEqual(200, response.status_code)
         self.assertEqual({'@odata.id': '/redfish/v1/Managers/bmc0'},
-                         response.json['Members'][0])
+                         response.json()['Members'][0])
         self.assertEqual({'@odata.id': '/redfish/v1/Managers/bmc1'},
-                         response.json['Members'][1])
+                         response.json()['Members'][1])
 
     @patch_resource('managers')
     def test_manager_resource_get(self, managers_mock):
@@ -229,16 +230,16 @@ class ManagersTestCase(EmulatorTestCase):
 
         response = self.app.get('/redfish/v1/Managers/xxxx-yyyy-zzzz')
 
-        self.assertEqual(200, response.status_code, response.json)
-        self.assertEqual('xxxx-yyyy-zzzz', response.json['Id'])
-        self.assertEqual('xxxx-yyyy-zzzz', response.json['UUID'])
-        self.assertIsNone(response.json['ServiceEntryPointUUID'])
+        self.assertEqual(200, response.status_code, response.json())
+        self.assertEqual('xxxx-yyyy-zzzz', response.json()['Id'])
+        self.assertEqual('xxxx-yyyy-zzzz', response.json()['UUID'])
+        self.assertIsNone(response.json()['ServiceEntryPointUUID'])
         self.assertEqual([{'@odata.id': '/redfish/v1/Systems/xxx'}],
-                         response.json['Links']['ManagerForServers'])
+                         response.json()['Links']['ManagerForServers'])
         self.assertEqual([{'@odata.id': '/redfish/v1/Chassis/chassis0'}],
-                         response.json['Links']['ManagerForChassis'])
+                         response.json()['Links']['ManagerForChassis'])
         self.assertEqual({'@odata.id': '/redfish/v1/Systems/xxx/VirtualMedia'},
-                         response.json['VirtualMedia'])
+                         response.json()['VirtualMedia'])
 
     @patch_resource('managers')
     def test_manager_resource_patch_valid_json(self, managers_mock):
@@ -262,8 +263,8 @@ class ManagersTestCase(EmulatorTestCase):
 
         response = self.app.patch(
             '/redfish/v1/Managers/xxxx-yyyy-zzzz',
-            data='not-json',
-            content_type='application/json')
+            content='not-json',
+            headers={'Content-Type': 'application/json'})
 
         self.assertEqual(400, response.status_code)
 
@@ -282,15 +283,15 @@ class ManagersTestCase(EmulatorTestCase):
 
         response = self.app.get('/redfish/v1/Managers/xxxx-yyyy-zzzz')
 
-        self.assertEqual(200, response.status_code, response.json)
-        self.assertEqual('xxxx-yyyy-zzzz', response.json['Id'])
-        self.assertEqual('xxxx-yyyy-zzzz', response.json['UUID'])
-        self.assertNotIn('ServiceEntryPointUUID', response.json)
+        self.assertEqual(200, response.status_code, response.json())
+        self.assertEqual('xxxx-yyyy-zzzz', response.json()['Id'])
+        self.assertEqual('xxxx-yyyy-zzzz', response.json()['UUID'])
+        self.assertNotIn('ServiceEntryPointUUID', response.json())
         self.assertEqual([{'@odata.id': '/redfish/v1/Systems/xxx'}],
-                         response.json['Links']['ManagerForServers'])
-        self.assertNotIn('Chassis', response.json['Links'])
+                         response.json()['Links']['ManagerForServers'])
+        self.assertNotIn('Chassis', response.json()['Links'])
         self.assertEqual({'@odata.id': '/redfish/v1/Systems/xxx/VirtualMedia'},
-                         response.json['VirtualMedia'])
+                         response.json()['VirtualMedia'])
 
 
 class SystemsTestCase(EmulatorTestCase):
@@ -302,9 +303,9 @@ class SystemsTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems')
         self.assertEqual(200, response.status_code)
         self.assertEqual({'@odata.id': '/redfish/v1/Systems/host0'},
-                         response.json['Members'][0])
+                         response.json()['Members'][0])
         self.assertEqual({'@odata.id': '/redfish/v1/Systems/host1'},
-                         response.json['Members'][1])
+                         response.json()['Members'][1])
 
     @patch_resource('storage')
     @patch_resource('indicators')
@@ -328,26 +329,26 @@ class SystemsTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('xxxx-yyyy-zzzz', response.json['Id'])
-        self.assertEqual('zzzz-yyyy-xxxx', response.json['UUID'])
-        self.assertEqual('On', response.json['PowerState'])
-        self.assertEqual('Off', response.json['IndicatorLED'])
+        self.assertEqual('xxxx-yyyy-zzzz', response.json()['Id'])
+        self.assertEqual('zzzz-yyyy-xxxx', response.json()['UUID'])
+        self.assertEqual('On', response.json()['PowerState'])
+        self.assertEqual('Off', response.json()['IndicatorLED'])
         self.assertEqual(
-            1, response.json['MemorySummary']['TotalSystemMemoryGiB'])
-        self.assertEqual(2, response.json['ProcessorSummary']['Count'])
+            1, response.json()['MemorySummary']['TotalSystemMemoryGiB'])
+        self.assertEqual(2, response.json()['ProcessorSummary']['Count'])
         self.assertEqual(
-            'Cd', response.json['Boot']['BootSourceOverrideTarget'])
+            'Cd', response.json()['Boot']['BootSourceOverrideTarget'])
         self.assertEqual(
-            'Legacy', response.json['Boot']['BootSourceOverrideMode'])
+            'Legacy', response.json()['Boot']['BootSourceOverrideMode'])
         self.assertEqual(
             [{'@odata.id': '/redfish/v1/Managers/aaaa-bbbb-cccc'}],
-            response.json['Links']['ManagedBy'])
+            response.json()['Links']['ManagedBy'])
         self.assertEqual(
             [{'@odata.id': '/redfish/v1/Chassis/chassis0'}],
-            response.json['Links']['Chassis'])
+            response.json()['Links']['Chassis'])
         self.assertEqual(
             {'@odata.id': '/redfish/v1/Systems/xxxx-yyyy-zzzz/VirtualMedia'},
-            response.json['VirtualMedia'])
+            response.json()['VirtualMedia'])
 
     @patch_resource('indicators')
     @patch_resource('chassis')
@@ -367,25 +368,25 @@ class SystemsTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('xxxx-yyyy-zzzz', response.json['Id'])
-        self.assertEqual('zzzz-yyyy-xxxx', response.json['UUID'])
-        self.assertEqual('On', response.json['PowerState'])
-        self.assertNotIn('IndicatorLED', response.json)
-        self.assertNotIn('MemorySummary', response.json)
-        self.assertNotIn('ProcessorSummary', response.json)
-        self.assertNotIn('BiosVersion', response.json)
-        self.assertNotIn('Bios', response.json)
+        self.assertEqual('xxxx-yyyy-zzzz', response.json()['Id'])
+        self.assertEqual('zzzz-yyyy-xxxx', response.json()['UUID'])
+        self.assertEqual('On', response.json()['PowerState'])
+        self.assertNotIn('IndicatorLED', response.json())
+        self.assertNotIn('MemorySummary', response.json())
+        self.assertNotIn('ProcessorSummary', response.json())
+        self.assertNotIn('BiosVersion', response.json())
+        self.assertNotIn('Bios', response.json())
         self.assertEqual(
-            'Cd', response.json['Boot']['BootSourceOverrideTarget'])
+            'Cd', response.json()['Boot']['BootSourceOverrideTarget'])
         self.assertEqual(
-            'Legacy', response.json['Boot']['BootSourceOverrideMode'])
+            'Legacy', response.json()['Boot']['BootSourceOverrideMode'])
         self.assertEqual(
             [{'@odata.id': '/redfish/v1/Managers/aaaa-bbbb-cccc'}],
-            response.json['Links']['ManagedBy'])
-        self.assertNotIn('Chassis', response.json['Links'])
+            response.json()['Links']['ManagedBy'])
+        self.assertNotIn('Chassis', response.json()['Links'])
         self.assertEqual(
             {'@odata.id': '/redfish/v1/Systems/xxxx-yyyy-zzzz/VirtualMedia'},
-            response.json['VirtualMedia'])
+            response.json()['VirtualMedia'])
 
     @patch_resource('indicators')
     @patch_resource('chassis')
@@ -405,21 +406,21 @@ class SystemsTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('xxxx-yyyy-zzzz', response.json['Id'])
-        self.assertEqual('zzzz-yyyy-xxxx', response.json['UUID'])
-        self.assertEqual('On', response.json['PowerState'])
-        self.assertNotIn('IndicatorLED', response.json)
-        self.assertNotIn('MemorySummary', response.json)
-        self.assertNotIn('ProcessorSummary', response.json)
-        self.assertNotIn('BiosVersion', response.json)
-        self.assertNotIn('Bios', response.json)
+        self.assertEqual('xxxx-yyyy-zzzz', response.json()['Id'])
+        self.assertEqual('zzzz-yyyy-xxxx', response.json()['UUID'])
+        self.assertEqual('On', response.json()['PowerState'])
+        self.assertNotIn('IndicatorLED', response.json())
+        self.assertNotIn('MemorySummary', response.json())
+        self.assertNotIn('ProcessorSummary', response.json())
+        self.assertNotIn('BiosVersion', response.json())
+        self.assertNotIn('Bios', response.json())
         self.assertEqual(
-            'Cd', response.json['Boot']['BootSourceOverrideTarget'])
+            'Cd', response.json()['Boot']['BootSourceOverrideTarget'])
         self.assertEqual(
-            'Legacy', response.json['Boot']['BootSourceOverrideMode'])
-        self.assertNotIn('ManagedBy', response.json['Links'])
-        self.assertNotIn('Chassis', response.json['Links'])
-        self.assertNotIn('VirtualMedia', response.json)
+            'Legacy', response.json()['Boot']['BootSourceOverrideMode'])
+        self.assertNotIn('ManagedBy', response.json()['Links'])
+        self.assertNotIn('Chassis', response.json()['Links'])
+        self.assertNotIn('VirtualMedia', response.json())
 
     @patch_resource('systems')
     def test_system_resource_patch(self, systems_mock):
@@ -618,9 +619,9 @@ class SystemsTestCase(EmulatorTestCase):
 
     @patch_resource('systems')
     def test_system_reset_action_fail(self, systems_mock):
-        self.app.application.config['SUSHY_EMULATOR_DISABLE_POWER_OFF'] = True
+        main.app.config['SUSHY_EMULATOR_DISABLE_POWER_OFF'] = True
         self.addCleanup(
-            self.app.application.config.__setitem__,
+            main.app.config.__setitem__,
             'SUSHY_EMULATOR_DISABLE_POWER_OFF', False)
 
         for reset_type in ('ForceOff', 'GracefulShutdown'):
@@ -677,10 +678,10 @@ class BiosTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/' + self.uuid + '/BIOS')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('BIOS', response.json['Id'])
+        self.assertEqual('BIOS', response.json()['Id'])
         self.assertEqual({"attribute 1": "value 1",
                           "attribute 2": "value 2"},
-                         response.json['Attributes'])
+                         response.json()['Attributes'])
 
     def test_get_bios_settings_pending(self, systems_mock):
         systems_mock.return_value.get_pending_bios.return_value = {
@@ -690,10 +691,10 @@ class BiosTestCase(EmulatorTestCase):
             '/redfish/v1/Systems/' + self.uuid + '/BIOS/Settings')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('Settings', response.json['Id'])
+        self.assertEqual('Settings', response.json()['Id'])
         self.assertEqual(
             {"attribute 1": "value 1"},
-            response.json['Attributes'])
+            response.json()['Attributes'])
 
     def test_get_bios_settings_empty(self, systems_mock):
         systems_mock.return_value.get_pending_bios.return_value = {}
@@ -701,8 +702,8 @@ class BiosTestCase(EmulatorTestCase):
             '/redfish/v1/Systems/' + self.uuid + '/BIOS/Settings')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('Settings', response.json['Id'])
-        self.assertEqual({}, response.json['Attributes'])
+        self.assertEqual('Settings', response.json()['Id'])
+        self.assertEqual({}, response.json()['Attributes'])
 
     def test_bios_settings_patch(self, systems_mock):
         data = {'Attributes': {'key': 'value'}}
@@ -732,7 +733,7 @@ class BiosTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/' + self.uuid + '/BIOS')
 
         self.assertEqual(200, response.status_code)
-        attrs = response.json['Attributes']
+        attrs = response.json()['Attributes']
         self.assertIs(True, attrs['QuietBoot'])
         self.assertEqual(10, attrs['NumCores'])
         self.assertIsInstance(attrs['NumCores'], int)
@@ -747,7 +748,7 @@ class BiosTestCase(EmulatorTestCase):
             '/redfish/v1/Systems/' + self.uuid + '/BIOS/Settings')
 
         self.assertEqual(200, response.status_code)
-        attrs = response.json['Attributes']
+        attrs = response.json()['Attributes']
         self.assertIs(False, attrs['QuietBoot'])
         self.assertEqual(15, attrs['NumCores'])
         self.assertIsInstance(attrs['NumCores'], int)
@@ -794,10 +795,10 @@ class ConditionalResourceAdvertisingTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertIn('Bios', response.json)
+        self.assertIn('Bios', response.json())
         self.assertEqual(
             '/redfish/v1/Systems/xxxx-yyyy-zzzz/BIOS',
-            response.json['Bios']['@odata.id'])
+            response.json()['Bios']['@odata.id'])
 
     def test_bios_not_advertised_when_not_supported(
             self, systems_mock, managers_mock, chassis_mock, indicators_mock,
@@ -822,7 +823,7 @@ class ConditionalResourceAdvertisingTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertNotIn('Bios', response.json)
+        self.assertNotIn('Bios', response.json())
 
     def test_processors_advertised_when_supported(
             self, systems_mock, managers_mock, chassis_mock, indicators_mock,
@@ -847,10 +848,10 @@ class ConditionalResourceAdvertisingTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertIn('Processors', response.json)
+        self.assertIn('Processors', response.json())
         self.assertEqual(
             '/redfish/v1/Systems/xxxx-yyyy-zzzz/Processors',
-            response.json['Processors']['@odata.id'])
+            response.json()['Processors']['@odata.id'])
 
     def test_processors_not_advertised_when_not_supported(
             self, systems_mock, managers_mock, chassis_mock, indicators_mock,
@@ -875,7 +876,7 @@ class ConditionalResourceAdvertisingTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertNotIn('Processors', response.json)
+        self.assertNotIn('Processors', response.json())
 
     def test_simple_storage_advertised_when_supported(
             self, systems_mock, managers_mock, chassis_mock, indicators_mock,
@@ -900,10 +901,10 @@ class ConditionalResourceAdvertisingTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertIn('SimpleStorage', response.json)
+        self.assertIn('SimpleStorage', response.json())
         self.assertEqual(
             '/redfish/v1/Systems/xxxx-yyyy-zzzz/SimpleStorage',
-            response.json['SimpleStorage']['@odata.id'])
+            response.json()['SimpleStorage']['@odata.id'])
 
     def test_simple_storage_not_advertised_when_not_supported(
             self, systems_mock, managers_mock, chassis_mock, indicators_mock,
@@ -928,7 +929,7 @@ class ConditionalResourceAdvertisingTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertNotIn('SimpleStorage', response.json)
+        self.assertNotIn('SimpleStorage', response.json())
 
     def test_storage_advertised_when_supported(
             self, systems_mock, managers_mock, chassis_mock, indicators_mock,
@@ -956,7 +957,7 @@ class ConditionalResourceAdvertisingTestCase(EmulatorTestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(
             '/redfish/v1/Systems/xxxx-yyyy-zzzz/Storage',
-            response.json['Storage']['@odata.id'])
+            response.json()['Storage']['@odata.id'])
 
     def test_storage_not_advertised_when_not_supported(
             self, systems_mock, managers_mock, chassis_mock, indicators_mock,
@@ -983,7 +984,7 @@ class ConditionalResourceAdvertisingTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/xxxx-yyyy-zzzz')
 
         self.assertEqual(200, response.status_code)
-        self.assertNotIn('Storage', response.json)
+        self.assertNotIn('Storage', response.json())
 
 
 @patch_resource('systems')
@@ -998,13 +999,13 @@ class EthernetInterfacesTestCase(EmulatorTestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual('Ethernet Interface Collection',
-                         response.json['Name'])
-        self.assertEqual(2, response.json['Members@odata.count'])
+                         response.json()['Name'])
+        self.assertEqual(2, response.json()['Members@odata.count'])
         self.assertEqual(['/redfish/v1/Systems/%s/EthernetInterfaces/nic1'
                           % self.uuid,
                           '/redfish/v1/Systems/%s/EthernetInterfaces/nic2'
                           % self.uuid],
-                         [m['@odata.id'] for m in response.json['Members']])
+                         [m['@odata.id'] for m in response.json()['Members']])
 
     def test_ethernet_interfaces_collection_empty(self, systems_mock):
         systems_mock.return_value.get_nics.return_value = []
@@ -1013,9 +1014,9 @@ class EthernetInterfacesTestCase(EmulatorTestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual('Ethernet Interface Collection',
-                         response.json['Name'])
-        self.assertEqual(0, response.json['Members@odata.count'])
-        self.assertEqual([], response.json['Members'])
+                         response.json()['Name'])
+        self.assertEqual(0, response.json()['Members@odata.count'])
+        self.assertEqual([], response.json()['Members'])
 
     def test_ethernet_interface(self, systems_mock):
         systems_mock.return_value.get_nics.return_value = [
@@ -1025,15 +1026,15 @@ class EthernetInterfacesTestCase(EmulatorTestCase):
                                 'nic2' % self.uuid)
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('nic2', response.json['Id'])
-        self.assertEqual('VNIC nic2', response.json['Name'])
+        self.assertEqual('nic2', response.json()['Id'])
+        self.assertEqual('VNIC nic2', response.json()['Name'])
         self.assertEqual('00:11:22:33:44:55',
-                         response.json['PermanentMACAddress'])
+                         response.json()['PermanentMACAddress'])
         self.assertEqual('00:11:22:33:44:55',
-                         response.json['MACAddress'])
+                         response.json()['MACAddress'])
         self.assertEqual('/redfish/v1/Systems/%s/EthernetInterfaces/nic2'
                          % self.uuid,
-                         response.json['@odata.id'])
+                         response.json()['@odata.id'])
 
     def test_ethernet_interface_not_found(self, systems_mock):
         systems_mock.return_value.get_nics.return_value = [
@@ -1056,12 +1057,12 @@ class SecureBootTestCase(EmulatorTestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual('UEFI Secure Boot',
-                         response.json['Name'])
-        self.assertTrue(response.json['SecureBootEnable'])
+                         response.json()['Name'])
+        self.assertTrue(response.json()['SecureBootEnable'])
 
         systems_mock.get_secure_boot.return_value = False
         response = self.app.get('redfish/v1/Systems/%s/SecureBoot' % self.uuid)
-        self.assertFalse(response.json['SecureBootEnable'])
+        self.assertFalse(response.json()['SecureBootEnable'])
 
     def test_secure_boot_patch_on(self, systems_mock):
         systems_mock = systems_mock.return_value
@@ -1120,13 +1121,13 @@ class StorageTestCase(EmulatorTestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual('Simple Storage Collection',
-                         response.json['Name'])
-        self.assertEqual(2, response.json['Members@odata.count'])
+                         response.json()['Name'])
+        self.assertEqual(2, response.json()['Members@odata.count'])
         self.assertEqual({'/redfish/v1/Systems/%s/SimpleStorage/virtio'
                           % self.uuid,
                           '/redfish/v1/Systems/%s/SimpleStorage/ide'
                           % self.uuid},
-                         {m['@odata.id'] for m in response.json['Members']})
+                         {m['@odata.id'] for m in response.json()['Members']})
 
     def test_simple_storage_collection_empty(self, systems_mock):
         systems_mock = systems_mock.return_value
@@ -1136,9 +1137,9 @@ class StorageTestCase(EmulatorTestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual('Simple Storage Collection',
-                         response.json['Name'])
-        self.assertEqual(0, response.json['Members@odata.count'])
-        self.assertEqual([], response.json['Members'])
+                         response.json()['Name'])
+        self.assertEqual(0, response.json()['Members@odata.count'])
+        self.assertEqual([], response.json()['Members'])
 
     def test_simple_storage(self, systems_mock):
         systems_mock = systems_mock.return_value
@@ -1176,15 +1177,17 @@ class StorageTestCase(EmulatorTestCase):
                                 % self.uuid)
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('virtio', response.json['Id'])
-        self.assertEqual('virtio Controller', response.json['Name'])
-        self.assertEqual('testVM1.img', response.json['Devices'][0]['Name'])
-        self.assertEqual(100000, response.json['Devices'][0]['CapacityBytes'])
-        self.assertEqual('sdb1', response.json['Devices'][1]['Name'])
-        self.assertEqual(150000, response.json['Devices'][1]['CapacityBytes'])
+        self.assertEqual('virtio', response.json()['Id'])
+        self.assertEqual('virtio Controller', response.json()['Name'])
+        self.assertEqual('testVM1.img', response.json()['Devices'][0]['Name'])
+        self.assertEqual(100000,
+                         response.json()['Devices'][0]['CapacityBytes'])
+        self.assertEqual('sdb1', response.json()['Devices'][1]['Name'])
+        self.assertEqual(150000,
+                         response.json()['Devices'][1]['CapacityBytes'])
         self.assertEqual('/redfish/v1/Systems/%s/SimpleStorage/virtio'
                          % self.uuid,
-                         response.json['@odata.id'])
+                         response.json()['@odata.id'])
 
     def test_simple_storage_not_found(self, systems_mock):
         systems_mock = systems_mock.return_value
@@ -1242,7 +1245,7 @@ class StorageTestCase(EmulatorTestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual({'@odata.id':
                           '/redfish/v1/Systems/vbmc-node/Storage/1'},
-                         response.json['Members'][0])
+                         response.json()['Members'][0])
 
     @patch_resource('storage')
     def test_storage_resource_get(self, storage_mock, systems_mock):
@@ -1262,9 +1265,9 @@ class StorageTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Systems/vbmc-node/Storage/1')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('1', response.json['Id'])
-        self.assertEqual('Local Storage Controller', response.json['Name'])
-        stg_ctl = response.json['StorageControllers'][0]
+        self.assertEqual('1', response.json()['Id'])
+        self.assertEqual('Local Storage Controller', response.json()['Name'])
+        stg_ctl = response.json()['StorageControllers'][0]
         self.assertEqual("0", stg_ctl['MemberId'])
         self.assertEqual("Contoso Integrated RAID", stg_ctl['Name'])
         self.assertEqual(12, stg_ctl['SpeedGbps'])
@@ -1283,10 +1286,10 @@ class StorageTestCase(EmulatorTestCase):
                                 '/Drives/32ADF365C6C1B7BD')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('32ADF365C6C1B7BD', response.json['Id'])
-        self.assertEqual('Drive Sample', response.json['Name'])
-        self.assertEqual(899527000000, response.json['CapacityBytes'])
-        self.assertEqual('SAS', response.json['Protocol'])
+        self.assertEqual('32ADF365C6C1B7BD', response.json()['Id'])
+        self.assertEqual('Drive Sample', response.json()['Name'])
+        self.assertEqual(899527000000, response.json()['CapacityBytes'])
+        self.assertEqual('SAS', response.json()['Protocol'])
 
     @patch_resource('volumes')
     def test_volume_collection_get(self, volumes_mock, systems_mock):
@@ -1308,7 +1311,7 @@ class StorageTestCase(EmulatorTestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual({'@odata.id':
                           '/redfish/v1/Systems/vmc-node/Storage/1/Volumes/1'},
-                         response.json['Members'][0])
+                         response.json()['Members'][0])
 
     @patch_resource('volumes')
     def test_create_volume_post(self, volumes_mock, systems_mock):
@@ -1345,10 +1348,10 @@ class StorageTestCase(EmulatorTestCase):
                                 'Volumes/1')
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual('1', response.json['Id'])
-        self.assertEqual('Sample Volume 1', response.json['Name'])
-        self.assertEqual('Mirrored', response.json['VolumeType'])
-        self.assertEqual(23748, response.json['CapacityBytes'])
+        self.assertEqual('1', response.json()['Id'])
+        self.assertEqual('Sample Volume 1', response.json()['Name'])
+        self.assertEqual('Mirrored', response.json()['VolumeType'])
+        self.assertEqual(23748, response.json()['CapacityBytes'])
 
 
 class RegistryTestCase(EmulatorTestCase):
@@ -1356,47 +1359,48 @@ class RegistryTestCase(EmulatorTestCase):
     def test_registry_file_collection(self):
         response = self.app.get('/redfish/v1/Registries')
         self.assertEqual(200, response.status_code)
-        self.assertEqual('/redfish/v1/Registries', response.json['@odata.id'])
+        self.assertEqual('/redfish/v1/Registries',
+                         response.json()['@odata.id'])
         self.assertEqual(
             {'@odata.id': '/redfish/v1/Registries/Messages'},
-            response.json['Members'][0])
+            response.json()['Members'][0])
         self.assertEqual(
             {'@odata.id':
                 '/redfish/v1/Registries/BiosAttributeRegistry.v1_0_0'},
-            response.json['Members'][1])
+            response.json()['Members'][1])
 
     def test_bios_attribute_registry_file(self):
         response = self.app.get(
             '/redfish/v1/Registries/BiosAttributeRegistry.v1_0_0')
         self.assertEqual(200, response.status_code)
         self.assertEqual('/redfish/v1/Registries/BiosAttributeRegistry.v1_0_0',
-                         response.json['@odata.id'])
+                         response.json()['@odata.id'])
         self.assertEqual(
             {'Language': 'en',
              'Uri': '/redfish/v1/Systems/Bios/BiosRegistry'},
-            response.json['Location'][0])
+            response.json()['Location'][0])
 
     def test_message_registry_file(self):
         response = self.app.get(
             '/redfish/v1/Registries/Messages')
         self.assertEqual(200, response.status_code)
         self.assertEqual('/redfish/v1/Registries/Messages',
-                         response.json['@odata.id'])
+                         response.json()['@odata.id'])
         self.assertEqual({'Language': 'En',
                           'Uri': '/redfish/v1/Registries/Messages/Registry'},
-                         response.json['Location'][0])
+                         response.json()['Location'][0])
 
     def test_bios_registry(self):
         response = self.app.get(
             '/redfish/v1/Systems/Bios/BiosRegistry')
         self.assertEqual(200, response.status_code)
         self.assertEqual('/redfish/v1/Systems/Bios/BiosRegistry',
-                         response.json['@odata.id'])
+                         response.json()['@odata.id'])
         self.assertEqual('BIOS Attribute Registry',
-                         response.json['Name'])
+                         response.json()['Name'])
         self.assertEqual('BiosAttributeRegistryP89.v1_0_0',
-                         response.json['Id'])
-        entries = response.json['RegistryEntries']
+                         response.json()['Id'])
+        entries = response.json()['RegistryEntries']
         self.assertEqual(len(entries['Attributes']), 10)
         self.assertEqual({'AttributeName': 'ProcTurboMode',
                           'CurrentValue': None,
@@ -1421,10 +1425,10 @@ class RegistryTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/Registries/Messages/Registry')
         self.assertEqual(200, response.status_code)
         self.assertEqual('/redfish/v1/Registries/Messages/Registry',
-                         response.json['@odata.id'])
-        self.assertEqual('Message Registry', response.json['Name'])
-        self.assertEqual('1.1.1', response.json['Id'])
-        messages = response.json['Messages']
+                         response.json()['@odata.id'])
+        self.assertEqual('Message Registry', response.json()['Name'])
+        self.assertEqual('1.1.1', response.json()['Id'])
+        messages = response.json()['Messages']
         self.assertEqual({"Description": "The command was successful.",
                           "Message": "The command was successful",
                           "Severity": "Informational",
@@ -1439,17 +1443,17 @@ class TaskServiceTestCase(EmulatorTestCase):
         response = self.app.get('/redfish/v1/TaskService')
         self.assertEqual(200, response.status_code)
         self.assertEqual('/redfish/v1/TaskService',
-                         response.json['@odata.id'])
-        self.assertEqual('Tasks Service', response.json['Name'])
-        self.assertEqual(True, response.json['ServiceEnabled'])
+                         response.json()['@odata.id'])
+        self.assertEqual('Tasks Service', response.json()['Name'])
+        self.assertEqual(True, response.json()['ServiceEnabled'])
 
     def test_task_service_task(self):
         response = self.app.get('/redfish/v1/TaskService/Tasks/42')
         self.assertEqual(200, response.status_code)
         self.assertEqual('/redfish/v1/TaskService/Tasks/42',
-                         response.json['@odata.id'])
-        self.assertEqual('Task 42', response.json['Name'])
-        self.assertEqual('Completed', response.json['TaskState'])
+                         response.json()['@odata.id'])
+        self.assertEqual('Task 42', response.json()['Name'])
+        self.assertEqual('Completed', response.json()['TaskState'])
 
 
 class ZombieCleanupTestCase(base.BaseTestCase):
@@ -1553,14 +1557,16 @@ class ZombieCleanupTestCase(base.BaseTestCase):
         with mock.patch('sushy_tools.emulator.main.parse_args') as mock_parse:
             mock_parse.return_value = mock_args
 
-            # Mock app configuration to avoid actual Flask app setup
-            with mock.patch('sushy_tools.emulator.main.app') as mock_app:
+            # Mock app configuration to avoid actually serving the app
+            with mock.patch('sushy_tools.emulator.main.app') as mock_app, \
+                    mock.patch.object(main.uvicorn, 'run') as mock_run:
                 mock_app.configure = mock.Mock()
                 mock_app.config = {}
-                mock_app.run = mock.Mock()
 
                 # Call main function
                 main.main()
+
+            mock_run.assert_called_once()
 
         # Verify signal.signal was called with SIGCHLD and cleanup function
         mock_signal.assert_called_with(signal.SIGCHLD, main.cleanup_zombies)
